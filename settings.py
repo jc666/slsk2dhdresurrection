@@ -26,6 +26,7 @@ DEFAULTS = {
     "max_active": 10,
     "quality": "best",
     "lang": "es",
+    "theme": "maligna",
 }
 
 

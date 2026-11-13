@@ -22,7 +22,18 @@ from slskd_mgr import Slskd
 TITLE = "SLSK 2D HD Remake Remaster ~resurrection~"
 TUNE_URL = "https://www.tunemymusic.com/transfer"
 BLACK, WHITE, RED, YELLOW = "#000000", "#FFFFFF", "#EF0606", "#EFE806"
-BG = BLACK           # window background
+THEME = settings.load().get("theme") or "maligna"      # "maligna" (colour) or "normie" (black and white)
+NORMIE = THEME == "normie"
+BG = WHITE if NORMIE else BLACK           # window background
+TEXT = BLACK if NORMIE else WHITE         # text on the window
+HEAD_BG = BLACK if NORMIE else RED        # top bar
+HEAD_FG = WHITE if NORMIE else BLACK
+HEAD_BTN = WHITE if NORMIE else RED       # Soulseek login button
+BTN_A = BLACK if NORMIE else YELLOW       # normal buttons and the active tab
+BTN_B = BLACK if NORMIE else WHITE        # action buttons under the queue
+BAR = BLACK if NORMIE else RED            # progress bar
+SEL_LIST = "#DDDDDD" if NORMIE else YELLOW  # highlighted item in the quality list
+START_FILL = BLACK if NORMIE else "#d20000"
 FIELD, FG = WHITE, BLACK   # white fields and black text inside them
 GREY_TEXT = "#6B6B6B"      # text of disabled buttons
 SELECT_ROW = "#DDDDDD"
@@ -94,11 +105,21 @@ class FlatButton(tk.Canvas):
         if w < 4 or h < 4:
             return
         self.delete("all")
-        lw = 2 if self._outline else 0
-        self.create_rectangle(lw // 2, lw // 2, w - 1 - lw // 2, h - 1 - lw // 2, fill=self._fill,
-                              outline=self._outline or self._fill, width=max(1, lw), tags="bg")
-        self.create_text(w // 2, h // 2, text=self._text.upper(), font=self._font(w, h),
-                         fill=GREY_TEXT if self._state == "disabled" and not self._always_black else BLACK)
+        disabled = self._state == "disabled" and not self._always_black
+        fill, outline, txt = self._fill, self._outline, BLACK
+        if NORMIE:
+            if disabled:
+                fill, outline, txt = WHITE, "#BBBBBB", GREY_TEXT
+            elif fill == WHITE:
+                outline = outline or BLACK
+            elif fill == BLACK:
+                txt = WHITE
+        elif disabled:
+            txt = GREY_TEXT
+        lw = 2 if outline else 0
+        self.create_rectangle(lw // 2, lw // 2, w - 1 - lw // 2, h - 1 - lw // 2, fill=fill,
+                              outline=outline or fill, width=max(1, lw), tags="bg")
+        self.create_text(w // 2, h // 2, text=self._text.upper(), font=self._font(w, h), fill=txt)
 
     def _release(self, e):
         if self._state == "normal" and 0 <= e.x < self.winfo_width() and 0 <= e.y < self.winfo_height():
@@ -215,7 +236,8 @@ class App(tk.Tk):
         self._update_title()
         self.protocol("WM_DELETE_WINDOW", self._close)
         self.after(400, self._tick)
-        self._cycle()
+        if not NORMIE:
+            self._cycle()
 
     # ---------- helpers ----------
     def _set_icon(self, win=None):
@@ -254,7 +276,7 @@ class App(tk.Tk):
         s = ttk.Style(self)
         s.theme_use("clam")
         s.configure("Treeview", background=WHITE, fieldbackground=WHITE, foreground=BLACK,
-                    rowheight=28, borderwidth=0, font=F(10))
+                    rowheight=28, borderwidth=1, bordercolor=BLACK, lightcolor=BLACK, darkcolor=BLACK, font=F(10))
         s.configure("Treeview.Heading", background=BLACK, foreground=WHITE, relief="flat",
                     borderwidth=1, bordercolor=BLACK, lightcolor=BLACK, darkcolor=BLACK, font=F(9, "bold"))
         s.map("Treeview.Heading", background=[("active", BLACK)], foreground=[("active", WHITE)])
@@ -265,24 +287,28 @@ class App(tk.Tk):
         s.map("TCombobox", fieldbackground=[("readonly", WHITE)], foreground=[("readonly", BLACK)],
               background=[("readonly", WHITE), ("active", WHITE)], selectbackground=[("readonly", WHITE)],
               selectforeground=[("readonly", BLACK)])
-        s.configure("Horizontal.TProgressbar", troughcolor=WHITE, background=RED,
-                    bordercolor=BLACK, lightcolor=RED, darkcolor=RED)
-        s.configure("Vertical.TScrollbar", background=WHITE, troughcolor=BLACK, bordercolor=BLACK,
-                    arrowcolor=BLACK, lightcolor=WHITE, darkcolor=WHITE)
+        s.configure("Horizontal.TProgressbar", troughcolor=WHITE, background=BAR,
+                    bordercolor=BLACK, lightcolor=BAR, darkcolor=BAR)
+        if NORMIE:
+            s.configure("Vertical.TScrollbar", background=BLACK, troughcolor=WHITE, bordercolor=BLACK,
+                        arrowcolor=WHITE, lightcolor=BLACK, darkcolor=BLACK)
+        else:
+            s.configure("Vertical.TScrollbar", background=WHITE, troughcolor=BLACK, bordercolor=BLACK,
+                        arrowcolor=BLACK, lightcolor=WHITE, darkcolor=WHITE)
         self.option_add("*TCombobox*Listbox.background", WHITE)
         self.option_add("*TCombobox*Listbox.foreground", BLACK)
-        self.option_add("*TCombobox*Listbox.selectBackground", YELLOW)
+        self.option_add("*TCombobox*Listbox.selectBackground", SEL_LIST)
         self.option_add("*TCombobox*Listbox.selectForeground", BLACK)
         self.option_add("*TCombobox*Listbox.font", "{%s} 10" % FAMILY)
 
-    def _label(self, parent, text, muted=True, size=9, bold=False, bg=BG, fg=WHITE, **kw):
+    def _label(self, parent, text, muted=True, size=9, bold=False, bg=BG, fg=TEXT, **kw):
         return tk.Label(parent, text=text, bg=bg, fg=fg, font=F(size, "bold" if bold else "normal"),
                         anchor="w", **kw)
 
     def _heading(self, parent, text):
         return self._label(parent, text, size=9, bold=True)
 
-    def _button(self, parent, text, cmd, accent=False, fill=YELLOW, state="normal", bg=BG, **kw):
+    def _button(self, parent, text, cmd, accent=False, fill=BTN_A, state="normal", bg=BG, **kw):
         return FlatButton(parent, text, cmd, fill=fill, bold=accent, state=state, bg=bg, **kw)
 
     def _update_title(self):
@@ -292,8 +318,18 @@ class App(tk.Tk):
             self.title_lbl.configure(text=TITLE + name)
 
     def _language(self):
+        self._choice_popup("Language", "Changing the language requires restarting the app.",
+                           "Saved. Close the app and open it again to apply the new language.",
+                           "lang", (("en", "English"), ("es", "Espa\u00f1ol")), i18n.LANG)
+
+    def _theme(self):
+        self._choice_popup("Theme", "Changing the theme requires restarting the app.",
+                           "Saved. Close the app and open it again to apply the new theme.",
+                           "theme", (("maligna", "Maligna"), ("normie", "Normie")), THEME)
+
+    def _choice_popup(self, title, msg_text, saved_text, key, options, current):
         win = tk.Toplevel(self)
-        win.title(T("Language"))
+        win.title(T(title))
         self._set_icon(win)
         win.configure(bg=BG)
         win.resizable(False, False)
@@ -302,24 +338,23 @@ class App(tk.Tk):
         x = self.winfo_rootx() + (self.winfo_width() - w) // 2
         y = self.winfo_rooty() + (self.winfo_height() - h) // 2
         win.geometry("%dx%d+%d+%d" % (w, h, max(0, x), max(0, y)))
-        msg = tk.Label(win, text=T("Changing the language requires restarting the app."), bg=BG, fg=WHITE,
-                       font=F(10), wraplength=400, justify="center")
+        msg = tk.Label(win, text=T(msg_text), bg=BG, fg=TEXT, font=F(10), wraplength=400, justify="center")
         msg.pack(pady=(30, 20))
         row = tk.Frame(win, bg=BG)
         row.pack(fill="x", padx=30)
         btns = {}
 
         def pick(code):
-            if code == i18n.LANG:
+            if code == current:
                 return
-            self.cfg["lang"] = code
+            self.cfg[key] = code
             settings.save(self.cfg)
-            msg.configure(text=T("Saved. Close the app and open it again to apply the new language."))
-            for c, b in btns.items():
+            msg.configure(text=T(saved_text))
+            for b in btns.values():
                 b.configure(state="disabled")
 
-        for code, name in (("en", "English"), ("es", "Espa\u00f1ol")):
-            b = self._button(row, name, lambda c=code: pick(c), state="disabled" if code == i18n.LANG else "normal")
+        for code, name in options:
+            b = self._button(row, name, lambda c=code: pick(c), state="disabled" if code == current else "normal")
             b.pack(side="left", fill="x", expand=True, padx=6)
             btns[code] = b
         self._button(win, T("OK"), win.destroy).pack(pady=22)
@@ -340,11 +375,11 @@ class App(tk.Tk):
         win.geometry("%dx%d+%d+%d" % (w, h, max(0, x), max(0, y)))
         box = tk.Frame(win, bg=BG, highlightthickness=0)
         box.pack(fill="both", expand=True, padx=14, pady=(14, 0))
-        tk.Label(box, text=TITLE, bg=BG, fg=WHITE, font=F(13, "bold"),
+        tk.Label(box, text=TITLE, bg=BG, fg=TEXT, font=F(13, "bold"),
                  wraplength=420, justify="center").pack(pady=(30, 14))
-        tk.Label(box, text=T("vibe coded by jc"), bg=BG, fg=WHITE, font=F(10)).pack()
-        tk.Label(box, text="MALIGNA 2026", bg=BG, fg=WHITE, font=F(10, "bold")).pack(pady=(6, 6))
-        link = tk.Label(box, text="http://maligna.net", bg=BG, fg=WHITE, cursor="hand2",
+        tk.Label(box, text=T("vibe coded by jc"), bg=BG, fg=TEXT, font=F(10)).pack()
+        tk.Label(box, text="MALIGNA 2026", bg=BG, fg=TEXT, font=F(10, "bold")).pack(pady=(6, 6))
+        link = tk.Label(box, text="http://maligna.net", bg=BG, fg=TEXT, cursor="hand2",
                         font=F(10, "underline"))
         link.pack()
         link.bind("<Button-1>", lambda e: webbrowser.open("http://maligna.net"))
@@ -365,6 +400,7 @@ class App(tk.Tk):
         m.add_command(label=T("Save session as\u2026"), command=self._menu_save_as)
         m.add_separator()
         m.add_command(label=T("Language") + "\u2026", command=self._language)
+        m.add_command(label=T("Theme") + "\u2026", command=self._theme)
         bar.add_cascade(label=T("File"), menu=m)
         am = tk.Menu(bar, tearoff=0)
         am.add_command(label=T("About\u2026"), command=self._about)
@@ -386,6 +422,8 @@ class App(tk.Tk):
 
     def _load_texture(self):
         self._bg_img = None
+        if NORMIE:
+            return
         try:
             tile = tk.PhotoImage(file=settings.resource_path("bg_tile.png"))
             tw, th = tile.width(), tile.height()
@@ -399,13 +437,13 @@ class App(tk.Tk):
 
     def _build(self):
         self._load_texture()
-        header = tk.Frame(self, bg=RED, height=40, highlightthickness=0)
+        header = tk.Frame(self, bg=HEAD_BG, height=40, highlightthickness=0)
         header.pack(fill="x")
         header.pack_propagate(False)
-        self.title_lbl = tk.Label(header, text=TITLE, bg=RED, fg=BLACK, font=F(11, "bold"))
+        self.title_lbl = tk.Label(header, text=TITLE, bg=HEAD_BG, fg=HEAD_FG, font=F(11, "bold"))
         self.title_lbl.pack(side="left", padx=16)
-        self._button(header, T("Soulseek login"), self._open_login, fill=RED, outline=BLACK, bg=RED).pack(side="right", padx=12, pady=6)
-        self.conn_lbl = tk.Label(header, text="", bg=RED, fg=BLACK, font=F(9))
+        self._button(header, T("Soulseek login"), self._open_login, fill=HEAD_BTN, outline=BLACK, bg=HEAD_BG).pack(side="right", padx=12, pady=6)
+        self.conn_lbl = tk.Label(header, text="", bg=HEAD_BG, fg=HEAD_FG, font=F(9))
         self.conn_lbl.pack(side="right", padx=6)
         tk.Frame(self, bg=BLACK, height=1).pack(fill="x")
 
@@ -445,15 +483,15 @@ class App(tk.Tk):
         for i, text in enumerate(STEPS, 1):
             row = tk.Frame(cf, bg=BG)
             row.pack(fill="x", pady=0)
-            tk.Label(row, text="%d." % i, bg=BG, fg=WHITE, width=2, anchor="ne", font=F(10)).pack(side="left", anchor="n")
-            tk.Label(row, text=text, bg=BG, fg=WHITE, anchor="w", justify="left", wraplength=330,
+            tk.Label(row, text="%d." % i, bg=BG, fg=TEXT, width=2, anchor="ne", font=F(10)).pack(side="left", anchor="n")
+            tk.Label(row, text=text, bg=BG, fg=TEXT, anchor="w", justify="left", wraplength=330,
                      font=F(10)).pack(side="left", fill="x")
         row = tk.Frame(cf, bg=BG)
         row.pack(fill="x", pady=1)
-        tk.Label(row, text="5.", bg=BG, fg=WHITE, width=2, anchor="ne", font=F(10)).pack(side="left", anchor="n")
-        tk.Label(row, text=T("Copy the contents of your text file"), bg=BG, fg=WHITE,
+        tk.Label(row, text="5.", bg=BG, fg=TEXT, width=2, anchor="ne", font=F(10)).pack(side="left", anchor="n")
+        tk.Label(row, text=T("Copy the contents of your text file"), bg=BG, fg=TEXT,
                  font=F(10)).pack(side="left")
-        link = tk.Label(row, text=T(" here"), bg=BG, fg=WHITE, cursor="hand2",
+        link = tk.Label(row, text=T(" here"), bg=BG, fg=TEXT, cursor="hand2",
                         font=F(10, "bold underline"))
         link.pack(side="left")
         link.bind("<Button-1>", lambda e: self._go_to_song_list())
@@ -504,7 +542,7 @@ class App(tk.Tk):
                      state="readonly", font=F(10)).pack(fill="x", ipady=4, **pad)
         self._label(pb, QUALITY_NOTE, wraplength=360, justify="left").pack(fill="x", pady=(4, 10), **pad)
 
-        self.start_btn = self._button(p, T("Start download"), self._start, accent=True, fill="#" + CYCLE[0], always_black=True)
+        self.start_btn = self._button(p, T("Start download"), self._start, accent=True, fill=START_FILL, always_black=True)
         self.start_btn.pack(side="bottom", fill="x", padx=32, pady=(0, 20))
         self._set_mode("convert")
         self._update_path()
@@ -551,23 +589,23 @@ class App(tk.Tk):
 
         acts = tk.Frame(p, bg=BG)
         acts.pack(fill="x", pady=(10, 0), **pad)
-        self.ok_btn = self._button(acts, T("Download anyway"), self._allow_low, state="disabled", fill=WHITE)
+        self.ok_btn = self._button(acts, T("Download anyway"), self._allow_low, state="disabled", fill=BTN_B)
         self.ok_btn.pack(side="left", fill="x", expand=True, padx=(0, 4))
-        self.skip_btn = self._button(acts, T("Skip"), self._skip_low, state="disabled", fill=WHITE)
+        self.skip_btn = self._button(acts, T("Skip"), self._skip_low, state="disabled", fill=BTN_B)
         self.skip_btn.pack(side="left", fill="x", expand=True, padx=4)
-        self.again_btn = self._button(acts, T("Search again"), self._search_again, state="disabled", fill=WHITE)
+        self.again_btn = self._button(acts, T("Search again"), self._search_again, state="disabled", fill=BTN_B)
         self.again_btn.pack(side="left", fill="x", expand=True, padx=(4, 0))
         bottom = tk.Frame(p, bg=BG)
         bottom.pack(fill="x", pady=(10, 24), **pad)
-        self._button(bottom, T("Open session folder"), self._open_session_folder, fill=WHITE).pack(side="left", fill="x", expand=True, padx=(0, 4))
-        self.stop_btn = self._button(bottom, T("Stop"), self._stop, state="disabled", fill=WHITE)
+        self._button(bottom, T("Open session folder"), self._open_session_folder, fill=BTN_B).pack(side="left", fill="x", expand=True, padx=(0, 4))
+        self.stop_btn = self._button(bottom, T("Stop"), self._stop, state="disabled", fill=BTN_B)
         self.stop_btn.pack(side="left", fill="x", expand=True, padx=(4, 0))
 
     # ---------- source tabs ----------
     def _set_mode(self, mode):
         self.mode = mode
-        self.tab_convert.configure(fill=YELLOW if mode == "convert" else WHITE, bold=mode == "convert")
-        self.tab_list.configure(fill=YELLOW if mode == "list" else WHITE, bold=mode == "list")
+        self.tab_convert.configure(fill=BTN_A if mode == "convert" else WHITE, bold=mode == "convert")
+        self.tab_list.configure(fill=BTN_A if mode == "list" else WHITE, bold=mode == "list")
         self.convert_frame.pack_forget()
         self.list_frame.pack_forget()
         (self.convert_frame if mode == "convert" else self.list_frame).pack(fill="both", expand=True)

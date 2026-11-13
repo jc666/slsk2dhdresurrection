@@ -14,6 +14,10 @@ ES = {
     "About": "Acerca de",
     "About…": "Acerca de…",
     "Language": "Idioma",
+    "Theme": "Tema",
+    "Changing the theme requires restarting the app.": "El cambio de tema requiere reiniciar la aplicación.",
+    "Saved. Close the app and open it again to apply the new theme.":
+        "Guardado. Cierra la aplicación y ábrela de nuevo para aplicar el nuevo tema.",
     "Changing the language requires restarting the app.":
         "El cambio de idioma requiere reiniciar la aplicación.",
     "Saved. Close the app and open it again to apply the new language.":
