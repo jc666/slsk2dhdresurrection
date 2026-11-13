@@ -1,0 +1,19 @@
+name: Build Windows exe
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyinstaller requests mutagen
+      - run: pyinstaller --onefile --windowed --name "SLSK 2D HD Remake Remaster" --icon icon.ico --add-data "fonts;fonts" --add-data "icon.ico;." --add-data "icon.png;." --add-data "bg_tile.png;." main.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SLSK-2D-HD-Remake-Remaster-exe
+          path: dist/*.exe
