@@ -154,6 +154,34 @@ class FlatButton(tk.Canvas):
         return {"state": self._state, "text": self._text}.get(key) or super().cget(key)
 
 
+class CheckBox(tk.Frame):
+    """White box with a black check mark (the native one turns invisible on a black window)."""
+
+    def __init__(self, parent, text, var):
+        super().__init__(parent, bg=BG, cursor="hand2")
+        self._var = var
+        self._box = tk.Canvas(self, width=16, height=16, bg=BG, bd=0, highlightthickness=0, cursor="hand2")
+        self._box.pack(side="left")
+        lbl = tk.Label(self, text=text, bg=BG, fg=TEXT, font=F(9), cursor="hand2")
+        lbl.pack(side="left", padx=(6, 0))
+        for w in (self, self._box, lbl):
+            w.bind("<ButtonRelease-1>", self._toggle)
+        var.trace_add("write", lambda *a: self._draw())
+        self._draw()
+
+    def _toggle(self, e=None):
+        self._var.set(not self._var.get())
+
+    def _draw(self):
+        c = self._box
+        c.delete("all")
+        c.create_rectangle(1, 1, 14, 14, fill=WHITE, outline=BLACK if NORMIE else WHITE)
+        if NORMIE:
+            c.create_rectangle(1, 1, 14, 14, fill=WHITE, outline=BLACK, width=2)
+        if self._var.get():
+            c.create_line(4, 8, 7, 11, 12, 4, fill=BLACK, width=2)
+
+
 class ArrowButton(tk.Canvas):
     """Black square with a white arrow, held down to repeat."""
 
@@ -582,9 +610,7 @@ class App(tk.Tk):
             var = tk.BooleanVar(value=False)
             var.trace_add("write", lambda *a: self._refilter(force=True))
             self.filter_vars[key] = var
-            tk.Checkbutton(filt, text=text, variable=var, bg=BG, fg=TEXT, selectcolor=WHITE, activebackground=BG,
-                           activeforeground=TEXT, highlightthickness=0, bd=0, font=F(9),
-                           cursor="hand2").pack(side="left", padx=(0, 12))
+            CheckBox(filt, text, var).pack(side="left", padx=(0, 12))
         self._visible = None
 
         box = tk.Frame(p, bg=FIELD, highlightthickness=0)
