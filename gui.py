@@ -572,6 +572,21 @@ class App(tk.Tk):
         self.summary = self._label(p, T("Nothing running yet."), size=10)
         self.summary.pack(fill="x", pady=(8, 8), **pad)
 
+        filt = tk.Frame(p, bg=BG)
+        filt.pack(fill="x", pady=(0, 8), **pad)
+        self._label(filt, T("Filter:"), size=10).pack(side="left", padx=(0, 10))
+        self.filter_vars = {}
+        labels = {"es": ("No encontradas", "Necesitan OK", "En curso", "Listas"),
+                  "en": ("Not found", "Needs OK", "In progress", "Done")}[i18n.LANG if i18n.LANG in ("es", "en") else "en"]
+        for key, text in zip(("notfound", "needsok", "progress", "done"), labels):
+            var = tk.BooleanVar(value=False)
+            var.trace_add("write", lambda *a: self._refilter(force=True))
+            self.filter_vars[key] = var
+            tk.Checkbutton(filt, text=text, variable=var, bg=BG, fg=TEXT, selectcolor=WHITE, activebackground=BG,
+                           activeforeground=TEXT, highlightthickness=0, bd=0, font=F(9),
+                           cursor="hand2").pack(side="left", padx=(0, 12))
+        self._visible = None
+
         box = tk.Frame(p, bg=FIELD, highlightthickness=0)
         box.pack(fill="both", expand=True, **pad)
         self.tree = ttk.Treeview(box, columns=("song", "detail", "status"), show="headings", selectmode="extended")
@@ -908,11 +923,39 @@ class App(tk.Tk):
             self._log("prepare error: %r" % (ex,))
             self._post("error", str(ex))
 
+    FILTER_STATES = {
+        "notfound": (eng.NOT_FOUND,),
+        "needsok": (eng.NEEDS_OK,),
+        "progress": (eng.SEARCHING, eng.DOWNLOADING, eng.PLACE),
+        "done": (eng.DONE,),
+    }
+
+    def _refilter(self, force=False):
+        """Show only the song types that are ticked (nothing ticked = show everything)."""
+        e = self.engine
+        if not e:
+            return
+        states = set()
+        for key, var in self.filter_vars.items():
+            if var.get():
+                states.update(self.FILTER_STATES[key])
+        if not states and self._visible is None:
+            return
+        vis = [str(t.idx) for t in e.tracks if t.state in states] if states else None
+        if vis is None:
+            vis = [str(t.idx) for t in e.tracks]
+        if force or vis != self._visible:
+            self.tree.set_children("", *vis)
+            self._visible = vis if states else None
+            self._sel_changed()
+
     def _show_queue(self, e):
         self.engine = e
         self.tree.delete(*self.tree.get_children())
+        self._visible = None
         for t in e.tracks:
             self.tree.insert("", "end", iid=str(t.idx), values=self._row(t), tags=(t.state,))
+        self._refilter(force=True)
         self.queue_lbl.configure(text=T("QUEUE \u00b7 {:,} songs").format(len(e.tracks)))
         self._update_summary()
 
@@ -957,6 +1000,7 @@ class App(tk.Tk):
                 for t in self.engine.tracks:
                     if t.state in (eng.NOT_FOUND, eng.NEEDS_OK):
                         self._update_row(t)
+            self._refilter()
             self._update_summary()
             if self.engine.notice:
                 self.conn_lbl.configure(text=self.engine.notice)

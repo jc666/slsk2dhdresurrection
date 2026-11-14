@@ -65,6 +65,7 @@ ES = {
     "QUEUE · {:,} songs": "COLA · {:,} canciones",
     "Max active downloads:": "Descargas activas máx.:",
     "Nothing running yet.": "Aún no hay nada en marcha.",
+    "Filter:": "Filtrar:",
     "Song": "Canción", "Details": "Detalles", "Status": "Estado",
     "Download anyway": "Descargar igual",
     "Skip": "Omitir",
