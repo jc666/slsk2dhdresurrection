@@ -17,6 +17,8 @@ QUEUED, SEARCHING, NOT_FOUND, NEEDS_OK, PLACE, DOWNLOADING, DONE, SKIPPED = (
 
 KEEPS_STOPPING = T("The Soulseek engine keeps stopping. Check that Windows Firewall or your antivirus isn't blocking slskd.exe.")
 RETRY_SECONDS = 10 * 60
+MAX_SEARCHES = 10     # searches running at the same time
+MAX_WAITING = 50      # songs waiting in other users' queues before new ones are started
 PROGRESS_FILE = "session-progress.json"
 
 
@@ -210,15 +212,19 @@ class Engine:
 
     def _dispatch(self, now):
         with self.lock:
-            active = sum(1 for t in self.tracks if t.state in (SEARCHING, DOWNLOADING))
+            # The limit counts only songs that are really downloading. Searching and waiting
+            # songs don't count; a few caps keep the number of searches and remote queues sane.
+            downloading = sum(1 for t in self.tracks if t.state == DOWNLOADING)
+            searching = sum(1 for t in self.tracks if t.state == SEARCHING)
+            waiting = sum(1 for t in self.tracks if t.state == PLACE)
             limit = max(1, int(self.max_active))
-            while active < limit and self.pending:
+            while downloading < limit and searching < MAX_SEARCHES and waiting < MAX_WAITING and self.pending:
                 t = self.pending.popleft()
                 if t.state != QUEUED:
                     continue
                 t.busy = True
                 self._set(t, state=SEARCHING, detail="")
-                active += 1
+                searching += 1
                 self._spawn(self._work_search, t)
             # Low-quality songs still waiting for an OK look for something better.
             for t in self.tracks:

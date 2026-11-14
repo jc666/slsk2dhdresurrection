@@ -1002,8 +1002,8 @@ class App(tk.Tk):
         e = self.engine
         c = e.counts()
         total = len(e.tracks)
-        active = c[eng.SEARCHING] + c[eng.DOWNLOADING]
-        waiting = c[eng.QUEUED] + c[eng.PLACE]
+        active = c[eng.DOWNLOADING]
+        waiting = c[eng.QUEUED] + c[eng.SEARCHING] + c[eng.PLACE]
         self.progress["value"] = 100.0 * c[eng.DONE] / max(1, total)
         parts = [T("{:,} done").format(c[eng.DONE]), T("%d active") % active, T("{:,} waiting in line").format(waiting),
                  T("%d not found") % c[eng.NOT_FOUND]]
