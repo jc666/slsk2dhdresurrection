@@ -41,8 +41,8 @@ CYCLE = ["d20000", "d26400", "d2b400", "b4d200", "75d200", "00d288", "00d27e",
          "009fd2", "0068d2", "1100d2", "6d00d2", "9f00d2", "d20075"]  # 1 s fade each, 13 s loop
 CYCLE_RGB = [tuple(int(c[i:i + 2], 16) for i in (0, 2, 4)) for c in CYCLE]
 TAG_COLORS = {
-    eng.DONE: "#1E7A3C", eng.DOWNLOADING: "#8A5F00", eng.SEARCHING: "#8A5F00",
-    eng.PLACE: "#1F5FBF", eng.NOT_FOUND: "#B3261E", eng.NEEDS_OK: "#A04E00",
+    eng.DONE: "#1E7A3C", eng.DOWNLOADING: "#1F5FBF", eng.SEARCHING: "#8A5F00",
+    eng.PLACE: "#1F5FBF", eng.NOT_FOUND: "#B3261E", eng.NEEDS_OK: "#7B2FA8",
     eng.QUEUED: "#555555", eng.SKIPPED: "#555555",
 }
 FAMILY = "Segoe UI"
@@ -185,8 +185,8 @@ class CheckBox(tk.Frame):
 class ArrowButton(tk.Canvas):
     """Black square with a white arrow, held down to repeat."""
 
-    def __init__(self, parent, up, command):
-        super().__init__(parent, width=22, height=14, bg=BLACK, bd=0, highlightthickness=0, cursor="hand2")
+    def __init__(self, parent, up, command, width=22, height=14, bg=BLACK):
+        super().__init__(parent, width=width, height=height, bg=bg, bd=0, highlightthickness=0, cursor="hand2")
         self._up, self._cmd, self._job = up, command, None
         self.bind("<Configure>", lambda e: self._draw())
         self.bind("<ButtonPress-1>", self._press)
@@ -533,13 +533,32 @@ class App(tk.Tk):
         bottom = tk.Frame(lf, bg=BG)
         bottom.pack(side="bottom", fill="x", pady=(4, 0))
         self._label(bottom, T("No limit on length.")).pack(side="left")
-        self._button(bottom, T("Swap Artist / Title"), self._swap).pack(side="right")
+        ArrowButton(bottom, False, lambda: self._find_step(1), width=26, height=28, bg=BLACK).pack(side="right")
+        ArrowButton(bottom, True, lambda: self._find_step(-1), width=26, height=28, bg=BLACK).pack(side="right", padx=(0, 2))
+        self.find_count = tk.Label(bottom, text="", bg=BG, fg=TEXT, font=F(9), width=7, anchor="e")
+        self.find_count.pack(side="right", padx=(0, 4))
+        self.find_var = tk.StringVar()
+        self.find_entry = tk.Entry(bottom, textvariable=self.find_var, width=11, bg=FIELD, fg=FG, insertbackground=FG,
+                                   relief="flat", highlightthickness=1, highlightbackground=BLACK,
+                                   highlightcolor=BLACK, font=F(10))
+        self.find_entry.pack(side="right", ipady=4, padx=(0, 6))
+        self._find_placeholder = True
+        self.find_var.set(T("Find") + "\u2026")
+        self.find_entry.configure(fg=GREY_TEXT)
+        self.find_entry.bind("<FocusIn>", self._find_focus_in)
+        self.find_entry.bind("<FocusOut>", self._find_focus_out)
+        self.find_var.trace_add("write", lambda *a: self._find_update())
+        self._find_matches, self._find_i = [], 0
         self.src = tk.Text(lf, bg=FIELD, fg=FG, insertbackground=FG, relief="flat", wrap="word", height=5,
                            highlightthickness=1, highlightbackground=BLACK, highlightcolor=BLACK,
                            font=F(10), padx=8, pady=6, undo=True)
         self.src.pack(fill="both", expand=True)
         self.src.bind("<Control-a>", lambda e: (self.src.tag_add("sel", "1.0", "end"), "break")[1])
         self.src.bind("<<Paste>>", self._on_paste)
+        self.src.bind("<KeyRelease>", lambda e: self._find_update(keep=True))
+        self.src.tag_configure("find", background="#FFE45C", foreground=BLACK)
+        self.src.tag_configure("cur", background="#FF9F1C", foreground=BLACK)
+        self.src.tag_raise("sel")
         self._ctx = tk.Menu(self.src, tearoff=0)
         self._ctx.add_command(label=T("Cut"), command=lambda: self.src.event_generate("<<Cut>>"))
         self._ctx.add_command(label=T("Copy"), command=lambda: self.src.event_generate("<<Copy>>"))
@@ -581,20 +600,6 @@ class App(tk.Tk):
         top.pack(fill="x", pady=(18, 10), **pad)
         self.queue_lbl = self._heading(top, T("QUEUE"))
         self.queue_lbl.pack(side="left")
-        spin = tk.Frame(top, bg=BG)
-        spin.pack(side="right")
-        self._label(spin, T("Max active downloads:"), size=10).pack(side="left", padx=(0, 8))
-        self.max_var = tk.StringVar(value=str(self.cfg.get("max_active", 10)))
-        self.max_var.trace_add("write", lambda *a: self._max_changed())
-        sp = tk.Frame(spin, bg=BG)
-        sp.pack(side="left")
-        tk.Entry(sp, width=4, textvariable=self.max_var, bg=FIELD, fg=FG, insertbackground=FG, relief="flat",
-                 highlightthickness=1, highlightbackground=BLACK, highlightcolor=BLACK, justify="center",
-                 font=F(11)).grid(row=0, column=0, rowspan=2, sticky="ns", ipady=3)
-        ArrowButton(sp, True, lambda: self._bump(1)).grid(row=0, column=1, sticky="nsew")
-        ArrowButton(sp, False, lambda: self._bump(-1)).grid(row=1, column=1, sticky="nsew")
-        sp.grid_rowconfigure((0, 1), weight=1)
-
         self.progress = ttk.Progressbar(p, maximum=100, style="Horizontal.TProgressbar")
         self.progress.pack(fill="x", **pad)
         self.summary = self._label(p, T("Nothing running yet."), size=10)
@@ -610,8 +615,21 @@ class App(tk.Tk):
             var = tk.BooleanVar(value=False)
             var.trace_add("write", lambda *a: self._refilter(force=True))
             self.filter_vars[key] = var
-            CheckBox(filt, text, var).pack(side="left", padx=(0, 12))
+            CheckBox(filt, text, var).pack(side="left", padx=(0, 8))
         self._visible = None
+        spin = tk.Frame(filt, bg=BG)
+        spin.pack(side="right")
+        self._label(spin, T("Max active dl:"), size=9).pack(side="left", padx=(0, 6))
+        self.max_var = tk.StringVar(value=str(self.cfg.get("max_active", 10)))
+        self.max_var.trace_add("write", lambda *a: self._max_changed())
+        sp = tk.Frame(spin, bg=BG)
+        sp.pack(side="left")
+        tk.Entry(sp, width=3, textvariable=self.max_var, bg=FIELD, fg=FG, insertbackground=FG, relief="flat",
+                 highlightthickness=1, highlightbackground=BLACK, highlightcolor=BLACK, justify="center",
+                 font=F(10)).grid(row=0, column=0, rowspan=2, sticky="ns", ipady=1)
+        ArrowButton(sp, True, lambda: self._bump(1), width=16, height=11).grid(row=0, column=1, sticky="nsew")
+        ArrowButton(sp, False, lambda: self._bump(-1), width=16, height=11).grid(row=1, column=1, sticky="nsew")
+        sp.grid_rowconfigure((0, 1), weight=1)
 
         box = tk.Frame(p, bg=FIELD, highlightthickness=0)
         box.pack(fill="both", expand=True, **pad)
@@ -679,11 +697,55 @@ class App(tk.Tk):
         self.src.insert("insert", raw)
         return "break"
 
-    def _swap(self):
-        text = self.src.get("1.0", "end").strip()
-        if text:
-            self.src.delete("1.0", "end")
-            self.src.insert("1.0", matching.swap_lines(text))
+    # ---------- find in the song list ----------
+    def _find_focus_in(self, e=None):
+        if self._find_placeholder:
+            self._find_placeholder = False
+            self.find_var.set("")
+            self.find_entry.configure(fg=FG)
+
+    def _find_focus_out(self, e=None):
+        if not self.find_var.get():
+            self._find_placeholder = True
+            self.find_var.set(T("Find") + "\u2026")
+            self.find_entry.configure(fg=GREY_TEXT)
+
+    def _find_update(self, keep=False):
+        term = "" if self._find_placeholder else self.find_var.get()
+        for tag in ("find", "cur"):
+            self.src.tag_remove(tag, "1.0", "end")
+        self._find_matches = []
+        if term:
+            pos = "1.0"
+            n = tk.IntVar()
+            while True:
+                pos = self.src.search(term, pos, stopindex="end", nocase=True, count=n)
+                if not pos:
+                    break
+                end = "%s+%dc" % (pos, n.get())
+                self.src.tag_add("find", pos, end)
+                self._find_matches.append((pos, end))
+                pos = end
+        if not keep or self._find_i >= len(self._find_matches):
+            self._find_i = 0
+        self._find_show(scroll=not keep)
+
+    def _find_show(self, scroll=True):
+        self.src.tag_remove("cur", "1.0", "end")
+        total = len(self._find_matches)
+        if not total:
+            self.find_count.configure(text="0" if not self._find_placeholder and self.find_var.get() else "")
+            return
+        a, b = self._find_matches[self._find_i]
+        self.src.tag_add("cur", a, b)
+        if scroll:
+            self.src.see(a)
+        self.find_count.configure(text="%d/%d" % (self._find_i + 1, total))
+
+    def _find_step(self, d):
+        if self._find_matches:
+            self._find_i = (self._find_i + d) % len(self._find_matches)
+            self._find_show()
 
     # ---------- small actions ----------
     def _session_path(self):

@@ -42,7 +42,8 @@ ES = {
     "Paste your songs, one per line, as Artist - Title":
         "Pega tus canciones, una por línea, como Artista - Título",
     "No limit on length.": "Sin límite de largo.",
-    "Swap Artist / Title": "Invertir Artista / Título",
+    "Find": "Buscar",
+    "Max active dl:": "Max dl activas:",
     "Cut": "Cortar", "Copy": "Copiar", "Paste": "Pegar", "Select all": "Seleccionar todo",
     "2. SESSION NAME (REQUIRED)": "2. NOMBRE DE LA SESIÓN (OBLIGATORIO)",
     "Browse…": "Examinar…",
@@ -63,7 +64,6 @@ ES = {
     # right column
     "QUEUE": "COLA",
     "QUEUE · {:,} songs": "COLA · {:,} canciones",
-    "Max active downloads:": "Descargas activas máx.:",
     "Nothing running yet.": "Aún no hay nada en marcha.",
     "Filter:": "Filtrar:",
     "Song": "Canción", "Details": "Detalles", "Status": "Estado",
