@@ -15,8 +15,10 @@ from slskd_mgr import NotConnected, SlskdError
 QUEUED, SEARCHING, NOT_FOUND, NEEDS_OK, PLACE, DOWNLOADING, DONE, SKIPPED = (
     "queued", "searching", "notfound", "needsok", "place", "downloading", "done", "skipped")
 
+OFFLINE_NOTICE = T("Disconnected from Soulseek. Reconnecting\u2026")
 KEEPS_STOPPING = T("The Soulseek engine keeps stopping. Check that Windows Firewall or your antivirus isn't blocking slskd.exe.")
 RETRY_SECONDS = 10 * 60
+SLOW_RETRY_AFTER = 3  # after this many misses in a row a not-found song is searched less often (3x the delay)
 MAX_SEARCHES = 20     # searches running at the same time (at least; grows with the download limit)
 MAX_WAITING = 50      # songs waiting in other users' queues before new ones are started
 PROGRESS_FILE = "session-progress.json"
@@ -42,6 +44,7 @@ class Track:
     next_try: float = 0.0
     pos_at: float = 0.0
     lost: int = 0
+    nf_count: int = 0
     ver: int = 0
     candidates: list = field(default_factory=list)
     bad_users: set = field(default_factory=set)
@@ -83,6 +86,8 @@ class Engine:
         self._health_fail = 0
         self._last_health = 0.0
         self._restarts = deque(maxlen=6)
+        self.offline = False          # engine is up but not logged in to Soulseek
+        self._offline_since = 0.0
 
     # ---------- lifecycle ----------
     def start(self):
@@ -140,6 +145,7 @@ class Engine:
         with self.lock:
             if t.state in (NOT_FOUND, NEEDS_OK) and not t.busy:
                 t.next_try = 0.0
+                t.nf_count = 0
 
     def skip(self, t):
         with self.lock:
@@ -159,7 +165,8 @@ class Engine:
                     if now - last_poll >= 2:
                         self._poll()
                         last_poll = now
-                    self._dispatch(now)
+                    if not self.offline:   # no new searches while Soulseek is disconnected
+                        self._dispatch(now)
                 if now - last_save >= 20:
                     self._save()
                     last_save = now
@@ -175,8 +182,23 @@ class Engine:
         dead = not self.slskd.running()
         if not dead:
             try:
-                self.slskd.api("GET", "/application", timeout=5)
+                info = self.slskd.api("GET", "/application", timeout=5) or {}
                 self._health_fail = 0
+                if (info.get("server") or {}).get("isLoggedIn"):
+                    if self.offline:
+                        self.offline = False
+                        if self.notice == OFFLINE_NOTICE:
+                            self.notice = ""
+                else:
+                    now = time.time()
+                    if not self.offline:
+                        self.offline, self._offline_since = True, now
+                        self.log("Soulseek connection lost; waiting for it to come back")
+                    self.notice = OFFLINE_NOTICE
+                    # logged out for over a minute: the engine is stuck, restart it
+                    if now - self._offline_since > 60:
+                        self.log("still logged out after 60 s; restarting the engine")
+                        dead = True
             except SlskdError:
                 self._health_fail += 1
                 dead = self._health_fail >= 4
@@ -185,30 +207,43 @@ class Engine:
             self._spawn(self._restart_engine)
 
     def _restart_engine(self):
+        """Restart the engine and keep trying (30 s, 1 min, 2 min, then every 5 min) until it logs in."""
         try:
-            now = time.time()
-            self._restarts.append(now)
-            self.log("Soulseek engine stopped; restarting")
-            if len(self._restarts) >= 5 and now - self._restarts[0] < 600:
-                self.notice = KEEPS_STOPPING
-            else:
-                self.notice = T("Soulseek engine stopped, restarting\u2026")
-            ok = False
-            if self.slskd.restart():
-                ok = self.slskd.wait_logged_in(timeout=90, cancel=self.stop_evt.is_set) == "ok"
-            if ok:
-                self._health_fail = 0
-                if self.notice != KEEPS_STOPPING:
-                    self.notice = ""
-                with self.lock:
-                    for t in self.tracks:
-                        if t.state == NOT_FOUND and t.detail.startswith(T("Search error")):
-                            t.next_try = 0.0
-            else:
+            attempt = 0
+            while not self.stop_evt.is_set():
+                now = time.time()
+                self._restarts.append(now)
+                self.log("Soulseek engine stopped; restarting (attempt %d)" % (attempt + 1))
+                if len(self._restarts) >= 5 and now - self._restarts[0] < 600:
+                    self.notice = KEEPS_STOPPING
+                else:
+                    self.notice = T("Soulseek engine stopped, restarting\u2026")
+                ok = False
+                if self.slskd.restart():
+                    ok = self.slskd.wait_logged_in(timeout=90, cancel=self.stop_evt.is_set) == "ok"
+                else:
+                    self.notice = T("Couldn't restart the Soulseek engine. Press Stop, then Start download.")
+                    return
+                if ok:
+                    self._health_fail = 0
+                    self.offline = False
+                    if self.notice != KEEPS_STOPPING:
+                        self.notice = ""
+                    with self.lock:
+                        for t in self.tracks:
+                            if t.state == NOT_FOUND and t.detail.startswith(T("Search error")):
+                                t.next_try = 0.0
+                    return
                 self.log("engine restart failed")
-                self.notice = T("Couldn't restart the Soulseek engine. Press Stop, then Start download.")
+                delay = (30, 60, 120)[attempt] if attempt < 3 else 300
+                attempt += 1
+                end = time.time() + delay
+                while not self.stop_evt.is_set() and time.time() < end:
+                    self.notice = T("Soulseek engine unavailable. Retrying in %d s\u2026") % int(end - time.time() + 0.99)
+                    time.sleep(1)
         finally:
             self.engine_down = False
+            self._offline_since = time.time()
 
     def _dispatch(self, now):
         with self.lock:
@@ -289,7 +324,9 @@ class Engine:
             t.busy = False
 
     def _not_found(self, t, why=""):
-        self._set(t, state=NOT_FOUND, tid="", next_try=time.time() + self.retry_seconds,
+        t.nf_count += 1
+        delay = self.retry_seconds * (3 if t.nf_count > SLOW_RETRY_AFTER else 1)
+        self._set(t, state=NOT_FOUND, tid="", next_try=time.time() + delay,
                   detail=why, percent=0, place=None)
 
     def _throttle(self):
@@ -382,6 +419,7 @@ class Engine:
         self._set(t, state=DOWNLOADING, tid=tid, label=cand["label"], user=cand["user"],
                   percent=0, place=None, lost=0,
                   detail="%s from %s" % (cand["label"], cand["user"]))
+        t.nf_count = 0
         return True
 
     def _delete_transfer(self, t):

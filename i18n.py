@@ -139,6 +139,8 @@ ES = {
     # engine notices / errors
     "The Soulseek engine keeps stopping. Check that Windows Firewall or your antivirus isn't blocking slskd.exe.":
         "El motor de Soulseek se sigue deteniendo. Revisa que el Firewall de Windows o tu antivirus no bloqueen slskd.exe.",
+    "Disconnected from Soulseek. Reconnecting…": "Desconectado de Soulseek. Reconectando…",
+    "Soulseek engine unavailable. Retrying in %d s…": "Motor de Soulseek no disponible. Reintentando en %d s…",
     "Soulseek engine stopped, restarting…": "El motor de Soulseek se detuvo, reiniciando…",
     "Couldn't restart the Soulseek engine. Press Stop, then Start download.":
         "No se pudo reiniciar el motor de Soulseek. Pulsa Detener y luego Iniciar descarga.",
