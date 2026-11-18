@@ -255,7 +255,7 @@ class App(tk.Tk):
         self.busy = False
         self.mode = "convert"
         self.session_file = None
-        self.saved_done, self.saved_skipped = [], []
+        self.saved_done, self.saved_skipped, self.saved_nf = [], [], []
         self.slskd = Slskd(settings.DATA_DIR, log=self._log)
         self._last_full = self._last_autosave = 0
         self._style()
@@ -855,18 +855,19 @@ class App(tk.Tk):
 
     # ---------- session files (.slsk, plain JSON) ----------
     def _session_data(self):
-        done, skipped = list(self.saved_done), list(self.saved_skipped)
+        done, skipped, nf = list(self.saved_done), list(self.saved_skipped), list(self.saved_nf)
         if self.engine:
             with self.engine.lock:
                 done = [{"idx": t.idx, "title": t.title, "saved_as": t.saved_as, "label": t.label}
                         for t in self.engine.tracks if t.state == eng.DONE]
                 skipped = [t.idx for t in self.engine.tracks if t.state == eng.SKIPPED]
+                nf = eng.notfound_list(self.engine.tracks)
         return {
             "app": "slsk-remake", "version": 1,
             "session_name": self.session_var.get().strip(), "save_root": self.save_root,
             "quality": "boomer" if self.quality_var.get() == QUALITY_LABELS["boomer"] else "best",
             "max_active": int(self.cfg.get("max_active", 10)),
-            "songs": self.src.get("1.0", "end").strip(), "done": done, "skipped": skipped,
+            "songs": self.src.get("1.0", "end").strip(), "done": done, "skipped": skipped, "notfound": nf,
         }
 
     def _write_session(self, path, quiet=False):
@@ -889,7 +890,7 @@ class App(tk.Tk):
                 return
         self.engine = None
         self.session_file = None
-        self.saved_done, self.saved_skipped = [], []
+        self.saved_done, self.saved_skipped, self.saved_nf = [], [], []
         self.tree.delete(*self.tree.get_children())
         self.src.delete("1.0", "end")
         self.session_var.set("")
@@ -939,11 +940,12 @@ class App(tk.Tk):
         self.src.delete("1.0", "end")
         self.src.insert("1.0", d.get("songs", ""))
         self.saved_done, self.saved_skipped = d.get("done", []), d.get("skipped", [])
+        self.saved_nf = d.get("notfound", [])
         self.session_file = path
         self._update_path()
         self._update_title()
         tracks = self._tracks_from_text(d.get("songs", ""))
-        eng.apply_saved(tracks, self.saved_done, self.saved_skipped, self._session_path())
+        eng.apply_saved(tracks, self.saved_done, self.saved_skipped, self._session_path(), self.saved_nf)
         e = eng.Engine(self.slskd, self._session_path(), self.session_var.get().strip(), tracks)
         self._show_queue(e)
         self.conn_lbl.configure(text=T("Session loaded. Press Start to continue."))
@@ -1003,7 +1005,7 @@ class App(tk.Tk):
             if res != "ok":
                 raise RuntimeError(res)
             restored = eng.restore_progress(tracks, p["session_dir"])
-            eng.apply_saved(tracks, self.saved_done, self.saved_skipped, p["session_dir"])
+            eng.apply_saved(tracks, self.saved_done, self.saved_skipped, p["session_dir"], self.saved_nf)
             e = eng.Engine(self.slskd, p["session_dir"], p["session"], tracks, mode=p["quality"],
                            max_active=int(self.cfg.get("max_active", 10)), log=self._log)
             self._post("ready", e, restored)

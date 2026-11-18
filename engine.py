@@ -19,7 +19,11 @@ OFFLINE_NOTICE = T("Disconnected from Soulseek. Reconnecting\u2026")
 KEEPS_STOPPING = T("The Soulseek engine keeps stopping. Check that Windows Firewall or your antivirus isn't blocking slskd.exe.")
 RETRY_SECONDS = 10 * 60
 SLOW_RETRY_AFTER = 3  # after this many misses in a row a not-found song is searched less often (3x the delay)
-MAX_SEARCHES = 20     # searches running at the same time (at least; grows with the download limit)
+MAX_SEARCHES = 8      # searches running at the same time
+SEARCH_GAP = 3.0      # seconds between two searches sent to Soulseek (gentle on the server)
+LOGIN_STUCK_AFTER = 120   # seconds without a Soulseek login before the engine is stopped and left alone
+LOGIN_COOLDOWN = 30 * 60  # how long the engine stays stopped when Soulseek isn't answering logins
+COOLDOWN_NOTICE = T("Soulseek isn't answering. Waiting %d min before trying again\u2026")
 MAX_WAITING = 50      # songs waiting in other users' queues before new ones are started
 PROGRESS_FILE = "session-progress.json"
 
@@ -180,6 +184,7 @@ class Engine:
         if self.engine_down or self.slskd.external:
             return
         dead = not self.slskd.running()
+        stuck = False
         if not dead:
             try:
                 info = self.slskd.api("GET", "/application", timeout=5) or {}
@@ -201,20 +206,23 @@ class Engine:
                         self.log("Soulseek connection lost; waiting for it to come back")
                     self.notice = OFFLINE_NOTICE
                     # the server can be slow to answer a login; only restart after a long wait
-                    if now - self._offline_since > 300:
-                        self.log("still logged out after 5 min; restarting the engine")
-                        dead = True
+                    if now - self._offline_since > LOGIN_STUCK_AFTER:
+                        self.log("Soulseek isn't answering logins; stopping the engine for %d min" % (LOGIN_COOLDOWN // 60))
+                        dead, stuck = True, True
             except SlskdError:
                 self._health_fail += 1
                 dead = self._health_fail >= 4
         if dead:
             self.engine_down = True
-            self._spawn(self._restart_engine)
+            self._spawn(self._restart_engine, stuck)
 
-    def _restart_engine(self):
+    def _restart_engine(self, stuck=False):
         """Restart the engine and keep trying (30 s, 1 min, 2 min, then every 5 min) until it logs in."""
         try:
             attempt = 0
+            if stuck:   # leave Soulseek alone for a while; hammering logins only makes it worse
+                self.slskd.stop()
+                self._cooldown(LOGIN_COOLDOWN)
             while not self.stop_evt.is_set():
                 now = time.time()
                 self._restarts.append(now)
@@ -224,8 +232,10 @@ class Engine:
                 else:
                     self.notice = T("Soulseek engine stopped, restarting\u2026")
                 ok = False
+                result = ""
                 if self.slskd.restart():
-                    ok = self.slskd.wait_logged_in(timeout=180, cancel=self.stop_evt.is_set) == "ok"
+                    result = self.slskd.wait_logged_in(timeout=180, cancel=self.stop_evt.is_set)
+                    ok = result == "ok"
                 else:
                     self.notice = T("Couldn't restart the Soulseek engine. Press Stop, then Start download.")
                     return
@@ -240,6 +250,11 @@ class Engine:
                                 t.next_try = 0.0
                     return
                 self.log("engine restart failed")
+                if result.startswith(T("Couldn't log in")):   # the server answers nothing: wait long
+                    self.slskd.stop()
+                    self._cooldown(LOGIN_COOLDOWN)
+                    attempt += 1
+                    continue
                 delay = (30, 60, 120)[attempt] if attempt < 3 else 300
                 attempt += 1
                 end = time.time() + delay
@@ -250,6 +265,12 @@ class Engine:
             self.engine_down = False
             self._offline_since = time.time()
 
+    def _cooldown(self, seconds):
+        end = time.time() + seconds
+        while not self.stop_evt.is_set() and time.time() < end:
+            self.notice = COOLDOWN_NOTICE % int((end - time.time()) / 60 + 0.99)
+            time.sleep(1)
+
     def _dispatch(self, now):
         with self.lock:
             # The limit counts only songs that are really downloading. Searching and waiting
@@ -258,7 +279,7 @@ class Engine:
             searching = sum(1 for t in self.tracks if t.state == SEARCHING)
             waiting = sum(1 for t in self.tracks if t.state == PLACE)
             limit = max(1, int(self.max_active))
-            max_searches = max(MAX_SEARCHES, 2 * limit)
+            max_searches = MAX_SEARCHES
             while downloading < limit and searching < max_searches and waiting < MAX_WAITING and self.pending:
                 t = self.pending.popleft()
                 if t.state != QUEUED:
@@ -336,7 +357,7 @@ class Engine:
 
     def _throttle(self):
         with self._gate:
-            wait = 1.2 - (time.time() - self._last_search)
+            wait = SEARCH_GAP - (time.time() - self._last_search)
             if wait > 0:
                 time.sleep(wait)
             self._last_search = time.time()
@@ -588,19 +609,40 @@ class Engine:
             with self.lock:
                 done = [{"idx": t.idx, "title": t.title, "saved_as": t.saved_as, "label": t.label}
                         for t in self.tracks if t.state == DONE]
+                nf = notfound_list(self.tracks)
             self.session_dir.mkdir(parents=True, exist_ok=True)
-            (self.session_dir / PROGRESS_FILE).write_text(json.dumps(done), encoding="utf-8")
+            (self.session_dir / PROGRESS_FILE).write_text(
+                json.dumps({"done": done, "notfound": nf}), encoding="utf-8")
         except Exception as e:
             self.log("save error: %r" % (e,))
 
 
+def notfound_list(tracks):
+    return [{"idx": t.idx, "title": t.title, "nf": t.nf_count}
+            for t in tracks if t.state == NOT_FOUND]
+
+
+def _restore_notfound(tracks, notfound):
+    """Songs that weren't found last time stay 'not found' (searched again on the slow timer)."""
+    by_idx = {t.idx: t for t in tracks}
+    for d in notfound or []:
+        t = by_idx.get(d.get("idx"))
+        if t and t.state == QUEUED and matching.norm(t.title) == matching.norm(d.get("title", "")):
+            t.state = NOT_FOUND
+            t.nf_count = int(d.get("nf") or 1)
+            t.next_try = time.time() + RETRY_SECONDS * 3
+
+
 def restore_progress(tracks, session_dir):
-    """Mark songs already saved in this session folder as done (lets you resume)."""
+    """Mark songs already saved in this session folder as done, and missing ones as not found."""
     f = Path(session_dir) / PROGRESS_FILE
     try:
         saved = json.loads(f.read_text(encoding="utf-8"))
     except Exception:
         return 0
+    notfound = []
+    if isinstance(saved, dict):
+        notfound, saved = saved.get("notfound", []), saved.get("done", [])
     by_idx = {t.idx: t for t in tracks}
     n = 0
     for d in saved:
@@ -609,11 +651,12 @@ def restore_progress(tracks, session_dir):
                 and (Path(session_dir) / d.get("saved_as", "?")).exists():
             t.state, t.saved_as, t.label = DONE, d["saved_as"], d.get("label", "")
             n += 1
+    _restore_notfound(tracks, notfound)
     return n
 
 
-def apply_saved(tracks, done, skipped, session_dir):
-    """Apply progress stored in a .slsk session file (done and skipped songs)."""
+def apply_saved(tracks, done, skipped, session_dir, notfound=None):
+    """Apply progress stored in a .slsk session file (done, skipped and not-found songs)."""
     by_idx = {t.idx: t for t in tracks}
     for d in done or []:
         t = by_idx.get(d.get("idx"))
@@ -624,6 +667,7 @@ def apply_saved(tracks, done, skipped, session_dir):
         t = by_idx.get(idx)
         if t and t.state == QUEUED:
             t.state = SKIPPED
+    _restore_notfound(tracks, notfound)
 
 
 def _read_tags(path):
