@@ -154,8 +154,15 @@ class Slskd:
                 reachable = True
                 if (info.get("server") or {}).get("isLoggedIn"):
                     return "ok"
-            except SlskdError:
-                pass
+                last = "state: " + str(info.get("server") or sorted(info))[:200]
+                if last != getattr(self, "_lastlog", None):
+                    self._lastlog = last
+                    self.log("login wait: " + last)
+            except SlskdError as e:
+                last = "API error: %s" % str(e)[:150]
+                if last != getattr(self, "_lastlog", None):
+                    self._lastlog = last
+                    self.log("login wait: " + last)
             time.sleep(1)
         if not reachable:
             return T("The Soulseek engine didn't start. ") + self._log_hint()

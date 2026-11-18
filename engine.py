@@ -184,7 +184,12 @@ class Engine:
             try:
                 info = self.slskd.api("GET", "/application", timeout=5) or {}
                 self._health_fail = 0
-                if (info.get("server") or {}).get("isLoggedIn"):
+                srv = info.get("server") or {}
+                st = str(srv.get("state") or ("keys:" + ",".join(sorted(info.keys()))[:80] if not srv else srv))[:120]
+                if st != getattr(self, "_last_state", None):
+                    self._last_state = st
+                    self.log("engine state: %s (isLoggedIn=%r)" % (st, srv.get("isLoggedIn")))
+                if srv.get("isLoggedIn"):
                     if self.offline:
                         self.offline = False
                         if self.notice == OFFLINE_NOTICE:
@@ -195,9 +200,9 @@ class Engine:
                         self.offline, self._offline_since = True, now
                         self.log("Soulseek connection lost; waiting for it to come back")
                     self.notice = OFFLINE_NOTICE
-                    # logged out for over a minute: the engine is stuck, restart it
-                    if now - self._offline_since > 60:
-                        self.log("still logged out after 60 s; restarting the engine")
+                    # the server can be slow to answer a login; only restart after a long wait
+                    if now - self._offline_since > 300:
+                        self.log("still logged out after 5 min; restarting the engine")
                         dead = True
             except SlskdError:
                 self._health_fail += 1
@@ -220,7 +225,7 @@ class Engine:
                     self.notice = T("Soulseek engine stopped, restarting\u2026")
                 ok = False
                 if self.slskd.restart():
-                    ok = self.slskd.wait_logged_in(timeout=90, cancel=self.stop_evt.is_set) == "ok"
+                    ok = self.slskd.wait_logged_in(timeout=180, cancel=self.stop_evt.is_set) == "ok"
                 else:
                     self.notice = T("Couldn't restart the Soulseek engine. Press Stop, then Start download.")
                     return
