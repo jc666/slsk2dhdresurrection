@@ -129,7 +129,9 @@ class Slskd:
         if self.external:
             return
         if self.running() and self.creds == (user, password):
-            return
+            if self.logged_in():
+                return
+            self.kill()   # running but not logged in: start a fresh engine
         self.stop()
         web_port = _free_port(5030, "127.0.0.1")
         listen_port = _free_port(50300)
@@ -183,7 +185,8 @@ class Slskd:
         self.start(user, password)
         return True
 
-    def stop(self):
+    def kill(self):
+        """Stop the engine process but remember the login, so restart() works afterwards."""
         if self.proc is not None and self.proc.poll() is None:
             self.proc.terminate()
             try:
@@ -191,7 +194,17 @@ class Slskd:
             except Exception:
                 self.proc.kill()
         self.proc = None
+
+    def stop(self):
+        self.kill()
         self.creds = None
+
+    def logged_in(self):
+        try:
+            info = self.api("GET", "/application", timeout=4) or {}
+            return bool((info.get("server") or {}).get("isLoggedIn"))
+        except Exception:
+            return False
 
     # ---- API ----
     def api(self, method, path, timeout=30, **kw):

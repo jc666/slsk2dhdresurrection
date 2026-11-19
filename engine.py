@@ -136,8 +136,10 @@ class Engine:
 
     # ---------- user actions ----------
     def allow_low_quality(self, t):
+        """Works even while a background search for something better is running: that search
+        notices the song left NEEDS_OK and drops its result."""
         with self.lock:
-            if t.state != NEEDS_OK or t.busy:
+            if t.state != NEEDS_OK:
                 return
             t.allow_low = True
             t.busy = True
@@ -147,7 +149,7 @@ class Engine:
     def search_again(self, t):
         """Search a 'not found' song right now instead of waiting for its timer."""
         with self.lock:
-            if t.state in (NOT_FOUND, NEEDS_OK) and not t.busy:
+            if t.state in (NOT_FOUND, NEEDS_OK):
                 t.next_try = 0.0
                 t.nf_count = 0
 
@@ -221,7 +223,7 @@ class Engine:
         try:
             attempt = 0
             if stuck:   # leave Soulseek alone for a while; hammering logins only makes it worse
-                self.slskd.stop()
+                self.slskd.kill()
                 self._cooldown(LOGIN_COOLDOWN)
             while not self.stop_evt.is_set():
                 now = time.time()
@@ -237,6 +239,7 @@ class Engine:
                     result = self.slskd.wait_logged_in(timeout=180, cancel=self.stop_evt.is_set)
                     ok = result == "ok"
                 else:
+                    self.log("engine restart not possible (no login saved)")
                     self.notice = T("Couldn't restart the Soulseek engine. Press Stop, then Start download.")
                     return
                 if ok:
@@ -251,7 +254,7 @@ class Engine:
                     return
                 self.log("engine restart failed")
                 if result.startswith(T("Couldn't log in")):   # the server answers nothing: wait long
-                    self.slskd.stop()
+                    self.slskd.kill()
                     self._cooldown(LOGIN_COOLDOWN)
                     attempt += 1
                     continue
@@ -303,11 +306,15 @@ class Engine:
     # ---------- workers ----------
     def _work_search(self, t, keep=False):
         """keep=True: a low-quality song searching again; if nothing comes back it keeps its offer."""
+        handed_off = False
         try:
             cands = self._search(t)
             if self.stop_evt.is_set():
                 if not keep:
                     self._set(t, state=QUEUED)
+                return
+            if keep and t.state != NEEDS_OK:   # the user pressed "download anyway" meanwhile
+                handed_off = True
                 return
             if not cands and keep:
                 self._set(t, next_try=time.time() + self.retry_seconds)
@@ -328,7 +335,8 @@ class Engine:
             self.log("search error for %s: %r" % (t.display, e))
             self._not_found(t, T("Search error") + ": %s" % str(e)[:120])
         finally:
-            t.busy = False
+            if not handed_off:
+                t.busy = False
 
     def _work_sources(self, t, failed_user=None):
         try:
@@ -589,6 +597,8 @@ class Engine:
         if t.state == NOT_FOUND:
             mins = max(1, int((t.next_try - now) / 60 + 0.99))
             return T("%s, searching again in %d min") % (t.detail or T("No matching files"), mins)
+        if t.state == NEEDS_OK and t.busy:
+            return T("Searching for a better version\u2026")
         if t.state == NEEDS_OK:
             mins = max(1, int((t.next_try - now) / 60 + 0.99))
             return T("%s from %s. Waiting for your OK, searching for better in %d min") % (t.label, t.user, mins)
